@@ -16,11 +16,21 @@ import easyocr
 router = APIRouter()
 ocr_service = OCRService()
 
-# Khởi tạo EasyOCR
-reader = easyocr.Reader(['vi'], gpu=torch.cuda.is_available())
+# Khởi tạo EasyOCR với cấu hình cơ bản
+reader = easyocr.Reader(
+    ['vi'],
+    gpu=torch.cuda.is_available(),
+    download_enabled=True,
+    model_storage_directory='./models',
+    user_network_directory='./models',
+    recog_network='latin_g2',
+    detector=True,
+    recognizer=True,
+    verbose=False
+)
 
 # Khởi tạo LLaMA model
-model_path = "./models/Vintern-1B-v3_5-f16.gguf"
+model_path = "./models/Vintern-1B-v3_5-f16_q4_k.gguf"
 try:
     llm = Llama(
         model_path=model_path,
@@ -52,7 +62,7 @@ async def ocr_cccd(file: UploadFile = File(...)):
         results = reader.readtext(img_cv)
         raw_ocr_text = ""
         for (bbox, text, prob) in results:
-            if prob > 0.5:  # Chỉ lấy text có độ tin cậy > 50%
+             if prob > 0.3:  # Chỉ lấy text có độ tin cậy > 50%
                 raw_ocr_text += text + "\n"
 
         if not raw_ocr_text.strip():
@@ -67,22 +77,46 @@ async def ocr_cccd(file: UploadFile = File(...)):
 
         def extract_field(text, keywords, pattern):
             for keyword in keywords:
-                match = re.search(rf'{keyword}\s*:\s*({pattern})', text, re.IGNORECASE | re.DOTALL)
-                if match:
-                    return match.group(1).strip()
+                # Tìm dòng chứa keyword
+                lines = text.split('\n')
+                for line in lines:
+                    if keyword.lower() in line.lower():
+                        # Tìm giá trị sau keyword
+                        match = re.search(rf'{keyword}\s*[:|]\s*({pattern})', line, re.IGNORECASE | re.DOTALL)
+                        if match:
+                            return match.group(1).strip()
+                        # Nếu không tìm thấy giá trị sau keyword, tìm ở dòng tiếp theo
+                        idx = lines.index(line)
+                        if idx + 1 < len(lines):
+                            next_line = lines[idx + 1]
+                            match = re.search(rf'({pattern})', next_line, re.IGNORECASE | re.DOTALL)
+                            if match:
+                                return match.group(1).strip()
             return ""
 
+        # Cải thiện pattern cho từng trường
         parsed_data = {
             "id_number": extract_regex(raw_ocr_text, r'\b\d{12}\b'),
-            "full_name": extract_field(raw_ocr_text, ["Họ và tên", "Họ tên"], r'[A-ZĐ][a-zđéèêìíòóôùúý]+(?: [A-ZĐ][a-zđéèêìíòóôùúý]+)*'),
+            "full_name": extract_field(raw_ocr_text, ["Họ và tên", "Họ tên", "Full name"], r'[A-ZĐ][A-ZĐa-zđéèêìíòóôùúý]+(?:\s+[A-ZĐ][A-ZĐa-zđéèêìíòóôùúý]+)*'),
             "date_of_birth": extract_field(raw_ocr_text, ["Ngày sinh"], r'\d{2}/\d{2}/\d{4}'),
             "gender": extract_field(raw_ocr_text, ["Giới tính"], r'Nam|Nữ|Khác'),
             "nationality": extract_field(raw_ocr_text, ["Quốc tịch"], r'[A-ZĐ][a-zđéèêìíòóôùúý]+'),
-            "place_of_origin": extract_field(raw_ocr_text, ["Quê quán"], r'.*'),
-            "permanent_address": extract_field(raw_ocr_text, ["Nơi thường trú"], r'.*'),
+            "place_of_origin": extract_field(raw_ocr_text, ["Quê quán"], r'.*?(?=\n|$)'),
+            "permanent_address": extract_field(raw_ocr_text, ["Nơi thường trú"], r'.*?(?=\n|$)'),
             "date_of_issue": extract_field(raw_ocr_text, ["Ngày cấp"], r'\d{2}/\d{2}/\d{4}'),
-            "place_of_issue": extract_field(raw_ocr_text, ["Nơi cấp"], r'.*')
+            "place_of_issue": extract_field(raw_ocr_text, ["Nơi cấp"], r'.*?(?=\n|$)')
         }
+
+        # Xử lý kết quả
+        for key, value in parsed_data.items():
+            if value:
+                # Loại bỏ các ký tự đặc biệt không cần thiết
+                value = re.sub(r'[^\w\s/.,-]', '', value)
+                # Loại bỏ khoảng trắng thừa
+                value = ' '.join(value.split())
+                parsed_data[key] = value
+
+        # Chỉ giữ lại các trường có giá trị
         parsed_data = {k: v for k, v in parsed_data.items() if v}
 
         return JSONResponse(content={"status": "success", "extracted_data": parsed_data})
@@ -129,7 +163,7 @@ async def process_text(text: str):
         output = llm(
             prompt,
             max_tokens=512,
-            temperature=0.7,
+            temperature=0.8,
             top_p=0.95,
             stop=["User:", "\n"],
             echo=True
