@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OCR CCCD</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>OCR CCCD</h1>
+            <p>Tải lên hình ảnh CCCD để trích xuất thông tin</p>
+        </header>
+
+        <main>
+            <div id="drop-zone">
+                <input type="file" id="file-input" accept="image/*" style="display: none;">
+                <img src="/static/upload-icon.png" alt="Upload" class="upload-icon">
+                <p>Kéo thả hình ảnh vào đây hoặc click để chọn file</p>
+            </div>
+
+            <div id="preview-container" style="display: none;">
+                <div class="preview-wrapper">
+                    <img id="preview-image" src="" alt="Preview">
+                    <button id="remove-button" class="remove-button">Xóa ảnh</button>
+                </div>
+            </div>
+
+            <div id="result-container" style="display: none;">
+                <h2>Kết quả trích xuất</h2>
+                <div id="result-grid" class="result-grid"></div>
+            </div>
+        </main>
+
+        <div id="loading-spinner" class="loading-spinner" style="display: none;">
+            <div class="spinner"></div>
+            <p>Đang xử lý...</p>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html> 
