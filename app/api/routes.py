@@ -43,6 +43,44 @@ except Exception as e:
     print(f"Error loading LLaMA model: {e}")
     llm = None
 
+def is_cccd_image(image):
+    """
+    Kiểm tra xem ảnh có phải là CCCD hay không dựa trên các đặc điểm:
+    1. Tỷ lệ khung hình (aspect ratio)
+    2. Các từ khóa đặc trưng
+    3. Số CCCD
+    """
+    try:
+        # Chuyển đổi ảnh sang grayscale
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # 1. Kiểm tra tỷ lệ khung hình
+        height, width = image.shape[:2]
+        aspect_ratio = width / height
+        if not (1.4 <= aspect_ratio <= 1.7):  # Tỷ lệ chuẩn của CCCD
+            return False, "Tỷ lệ khung hình không phù hợp với CCCD"
+
+        # 3. Kiểm tra các từ khóa đặc trưng
+        results = reader.readtext(image)
+        text = " ".join([r[1] for r in results])
+        text = text.lower()
+        
+        required_keywords = ["căn cước", "công dân", "họ và tên", "ngày sinh", "giới tính"]
+        found_keywords = sum(1 for keyword in required_keywords if keyword in text)
+        
+        if found_keywords < 3:  # Cần ít nhất 3 từ khóa
+            return False, "Không tìm thấy đủ từ khóa đặc trưng của CCCD"
+
+        # 4. Kiểm tra số CCCD
+        if not re.search(r'\b\d{12}\b', text):
+            return False, "Không tìm thấy số CCCD hợp lệ"
+
+        return True, "Đây là ảnh CCCD hợp lệ"
+
+    except Exception as e:
+        logging.error(f"Lỗi khi kiểm tra CCCD: {str(e)}")
+        return False, f"Lỗi khi kiểm tra CCCD: {str(e)}"
+
 @router.get("/")
 async def read_root():
     return {"message": "API for CCCD OCR processing"}
@@ -58,11 +96,16 @@ async def ocr_cccd(file: UploadFile = File(...)):
         img_np = np.array(pil_image)
         img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
+        # Kiểm tra xem có phải là CCCD không
+        is_valid, message = is_cccd_image(img_cv)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=message)
+
         # Xử lý ảnh với EasyOCR
         results = reader.readtext(img_cv)
         raw_ocr_text = ""
         for (bbox, text, prob) in results:
-             if prob > 0.3:  # Chỉ lấy text có độ tin cậy > 50%
+            if prob > 0.3:  # Chỉ lấy text có độ tin cậy > 30%
                 raw_ocr_text += text + "\n"
 
         if not raw_ocr_text.strip():
@@ -115,6 +158,22 @@ async def ocr_cccd(file: UploadFile = File(...)):
                 # Loại bỏ khoảng trắng thừa
                 value = ' '.join(value.split())
                 parsed_data[key] = value
+
+        # Đặc biệt xử lý cho trường họ tên
+        if "full_name" in parsed_data:
+            # Tìm dòng chứa "Họ và tên" hoặc "Full name"
+            lines = raw_ocr_text.split('\n')
+            for i, line in enumerate(lines):
+                if "Họ và tên" in line or "Full name" in line:
+                    # Lấy dòng tiếp theo nếu có
+                    if i + 1 < len(lines):
+                        name = lines[i + 1].strip()
+                        # Loại bỏ các ký tự đặc biệt và khoảng trắng thừa
+                        name = re.sub(r'[^\w\s]', '', name)
+                        name = ' '.join(name.split())
+                        if name:
+                            parsed_data["full_name"] = name
+                            break
 
         # Chỉ giữ lại các trường có giá trị
         parsed_data = {k: v for k, v in parsed_data.items() if v}
